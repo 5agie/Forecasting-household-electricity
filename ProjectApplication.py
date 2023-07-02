@@ -238,128 +238,169 @@ def display_data_disturbution(column):
 
 # TRAIN, TEST AND MULTI-FORECAST
 
+# This function is used to train a model
 def train_model(parent, model_type, column_to_predict='Global_active_power'):
+    # Reading the dataset
     df = pd.read_csv(DATA_PATH, sep=';', low_memory=False, parse_dates={'date_time': ['Date', 'Time']},
                      infer_datetime_format=True, index_col='date_time',
                      na_values=['nan', '?'])
+    
+    # Filling any missing values in the data with the mean
     dm.fill_missing_values(df, 'mean', in_place=True)
+    
+    # Resampling the data hourly
     df_resampled = dm.resample_data(df, 'H')
 
+    # Checking if the model is multivariate
     if model_type == 'Multi':
+        # Creating the multivariate model and setting parameters
         model, fit_parameters, WINDOW_SIZE = Models.multivariate_model()
+        # Dropping unnecessary columns
         df_resampled.drop(columns=['Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3', 'Global_reactive_power'],
                           inplace=True)
     else:  # model is univariate
+        # Creating the univariate model and setting parameters
         model, fit_parameters, WINDOW_SIZE = Models.univariate_model()
+        # Retaining only the required column to predict
         df_resampled = df_resampled[column_to_predict].to_frame()
 
+    # Scaling the data
     df_scaled, scalers = dm.new_scale_data(df_resampled)
 
+    # Splitting the data into training and testing datasets
     train_data, test_data = dm.split_to_train_test(df_scaled, for_train=0.8, to_numpy=True)
 
+    # Splitting the data into windows for training and testing
     train_X, train_Y = dm.split_to_windows(train_data, train_data, window_size=WINDOW_SIZE)
     test_X, test_Y = dm.split_to_windows(test_data, test_data, window_size=WINDOW_SIZE)
 
+    # Training the model
     history = model.fit(train_X, train_Y, **fit_parameters)
 
-    # model.save_weights('NewWeights')
+    # Displaying a message box with the training loss
     messagebox.showinfo("info",
                         f"The model has been trained. \n The training loss(mae) is: {history.history['loss'][-1]:.3f}")
 
+    # Plotting the loss over epochs
     dv.plot(history.history['loss'], typ='line', title='Loss over epochs', xlabel="Epochs", ylabel="loss")
 
-
+# The function test_model is defined, with inputs for the parent, the model type, and the column to predict.
 def test_model(parent, model_type, column_to_predict="Global_active_power"):
+
+    # This block reads the data, fills missing values, and resamples it to an hourly rate
     df = pd.read_csv(DATA_PATH, sep=';', low_memory=False, parse_dates={'date_time': ['Date', 'Time']},
                      infer_datetime_format=True, index_col='date_time',
                      na_values=['nan', '?'])
     dm.fill_missing_values(df, 'mean', in_place=True)
     df_resampled = dm.resample_data(df, 'H')
+
+    # If the model type is 'Multi', a multivariate model is used and specific columns are dropped from the dataframe.
+    # Then, the model's weights are loaded from a saved file
     if model_type == 'Multi':
         model, _, WINDOW_SIZE = Models.multivariate_model()
         model.load_weights(r'Weights\MultiWeights').expect_partial()
         df_resampled.drop(columns=['Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3', 'Global_reactive_power'],
                           inplace=True)
+
+    # If the model type is not 'Multi', a univariate model is used and the dataframe is limited to the column to predict.
+    # Then, the model's weights are loaded from a saved file
     else:
         model, _, WINDOW_SIZE = Models.univariate_model()
         model.load_weights(r'Weights\UniWeights').expect_partial()
         df_resampled = df_resampled[column_to_predict].to_frame()
 
+    # The data is scaled, and split into training and testing data
     df_scaled, scalers = dm.new_scale_data(df_resampled)
-
     train_data, test_data = dm.split_to_train_test(df_scaled, for_train=0.8, to_numpy=True)
 
+    # The data is then split into windows for both the training and testing data
     train_X, train_Y = dm.split_to_windows(train_data, train_data, window_size=WINDOW_SIZE)
     test_X, test_Y = dm.split_to_windows(test_data, test_data, window_size=WINDOW_SIZE)
 
+    # The model makes predictions based on the test data
     forecasts = model.predict(test_X[:-1])
+    
+    # The data is rescaled back to its original range
     trues = dm.rescale_data(test_Y[:-1], scalers)
     rescaled_forecasts = dm.rescale_data(forecasts, scalers)
 
+    # Errors are calculated for the predictions
     mae = MAE(trues[column_to_predict], rescaled_forecasts[column_to_predict])
     rmse = np.sqrt(MSE(trues[column_to_predict], rescaled_forecasts[column_to_predict]))
     mape = MAPE(trues[column_to_predict], rescaled_forecasts[column_to_predict])
+    
+    # The errors are shown in an info box
     messagebox.showinfo("Finished testing", f"MAE:{mae:.3f} \n RMSE:{rmse:.3f} \n MAPE:{mape:.3f}")
 
+    # Plots are generated to visually compare the actual and forecasted values
     data = [trues[column_to_predict], rescaled_forecasts[column_to_predict]]
     legend = ['Real values', 'Forecasts']
 
     dv.multiple_line_plots(data, title=f"Hourly {column_to_predict}", xlabel="Timesteps",
                            ylabel=f"{column_to_predict}", legend=legend)
 
-
 def multi_forecast(model_type, forecast_len, column_to_predict):
-    df = pd.read_csv(DATA_PATH, sep=';', low_memory=False, parse_dates={'date_time': ['Date', 'Time']},
-                     infer_datetime_format=True, index_col='date_time',
-                     na_values=['nan', '?'])
+    # Reading the CSV data file. The 'sep' parameter is set to ';' meaning the data in the CSV file is separated by ';'.
+    # 'low_memory=False' is used when we have large CSV files to eliminate any low memory warnings.
+    df = pd.read_csv(DATA_PATH, sep=';', low_memory=False, parse_dates={'date_time': ['Date', 'Time']}, infer_datetime_format=True, index_col='date_time', na_values=['nan', '?'])
+    
+    # Fill the missing values in the dataframe 'df' with mean of the column
     dm.fill_missing_values(df, 'mean', in_place=True)
+    
+    # Resampling the data in hours
     df_resampled = dm.resample_data(df, 'H')
+    
+    # Check whether the model type is 'Multi'. If true, then load the respective model and weights, and drop unnecessary columns
     if model_type == 'Multi':
         model, _, WINDOW_SIZE = Models.multivariate_model()
         model.load_weights(r'Weights\MultiWeights')
-        df_resampled.drop(columns=['Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3', 'Global_reactive_power'],
-                          inplace=True)
+        df_resampled.drop(columns=['Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3', 'Global_reactive_power'], inplace=True)
+    
+    # If the model type is not 'Multi', then it must be 'Uni'. So load the respective model and weights, and drop unnecessary columns
     elif model_type == 'Uni':
         model, _, WINDOW_SIZE = Models.univariate_model()
         model.load_weights(r'Weights\UniWeights')
-        df_resampled.drop(columns=['Global_intensity', 'Voltage', 'Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3',
-                                   'Global_reactive_power'], inplace=True)
+        df_resampled.drop(columns=['Global_intensity', 'Voltage', 'Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3', 'Global_reactive_power'], inplace=True)
+    
+    # Scale the resampled data
     df_scaled, scalers = dm.new_scale_data(df_resampled)
-
+    
+    # Split the scaled data into training and testing datasets
     train_data, test_data = dm.split_to_train_test(df_scaled, for_train=0.8, to_numpy=True)
-
+    
+    # Split both the training and testing datasets into X and Y datasets
     train_X, train_Y = dm.split_to_windows(train_data, train_data, window_size=WINDOW_SIZE)
     test_X, test_Y = dm.split_to_windows(test_data, test_data, window_size=WINDOW_SIZE)
+    
+    # Rescale the testing Y data
     trues = dm.rescale_data(test_Y[:-1], scalers)
-
+    
+    # Get a random index from the testing X data and forecast the data
     rand_index = random.randint(0, test_X.shape[0] - 800)
     forecasts = tsh.multi_forecast(model, test_X[rand_index:rand_index + 800], forecast_length=forecast_len)
-
+    
+    # If the model type is 'Multi', reshape the forecasted data, else just rescale the forecasted data
     if model_type == 'Multi':
-        pass
         forecasts = np.concatenate(forecasts, axis=0)  # concatenates vertically
         forecasts = forecasts.reshape(forecasts.shape[0], forecasts.shape[2])  # Reshape to 2D array of shape (n,k)
         forecasts_rescaled_multi = dm.rescale_data(forecasts, scalers)
     else:
         forecasts_rescaled_multi = dm.rescale_data(np.concatenate(forecasts, axis=0), scalers)
-
-    errors = tsh.calculate_multi_forecast_errors(forecasts_rescaled_multi[column_to_predict], trues[column_to_predict],
-                                                 forecast_length=forecast_len)
-
+    
+    # Calculate the forecast errors
+    errors = tsh.calculate_multi_forecast_errors(forecasts_rescaled_multi[column_to_predict], trues[column_to_predict], forecast_length=forecast_len)
+    
+    # Display a messagebox with the forecast error details
     messagebox.showinfo("Finished forecasting", f" Error results: \n MAE:{errors['MAE']:.3f} \n ")
-
+    
+    # Plot the true values vs forecasts for a random window of data
     btn_window = Toplevel(root)
     btn_window.geometry("500x400")
-    plot_keyword_arguments = {'ylabel': column_to_predict, 'xlabel': 'Timesteps', 'forecast_length': forecast_len,
-                              'legend': ['Forecasts', 'True values']}
-    dv.plot_random_window(forecasts_rescaled_multi[column_to_predict], trues[column_to_predict],
-                          **plot_keyword_arguments)
-    show_random_window_btn = Button(btn_window,
-                                    command=lambda: dv.plot_random_window(forecasts_rescaled_multi[column_to_predict],
-                                                                          trues[column_to_predict],
-                                                                          **plot_keyword_arguments),
-                                    text="Show another random window", font=deafault_font)
-
+    plot_keyword_arguments = {'ylabel': column_to_predict, 'xlabel': 'Timesteps', 'forecast_length': forecast_len, 'legend': ['Forecasts', 'True values']}
+    dv.plot_random_window(forecasts_rescaled_multi[column_to_predict], trues[column_to_predict], **plot_keyword_arguments)
+    show_random_window_btn = Button(btn_window, command=lambda: dv.plot_random_window(forecasts_rescaled_multi[column_to_predict], trues[column_to_predict], **plot_keyword_arguments), text="Show another random window", font=deafault_font)
+    
+    # Display the button
     show_random_window_btn.pack(pady=30)
 
 
